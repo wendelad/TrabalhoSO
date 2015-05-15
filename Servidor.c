@@ -77,8 +77,8 @@ int main (int argc, char *argv[])
 	while(1){
 		write("Aguardando o cliente responder!\n");
 		send(novo_socket, buffer, strlen(buffer), 0)
-		bzero(buffer, 256);
-		aux = read(novo_socket, buffer, 256);
+		bzero(buffer, 2000);
+		aux = read(novo_socket, buffer, 2000);
 		if (aux < 0){
 			error("Erro de escrita no socket!\n");
 			exit(1);					
@@ -89,9 +89,9 @@ int main (int argc, char *argv[])
 			write("Mensagem recebida: %s\n", buffer);
 		}
 			
-		bzero(buffer, 256);
+		bzero(buffer, 2000);
 		write("Servidor Digite sua resposta: ");
-		fgets(buffer, 256, stdin);
+		fgets(buffer, 2000, stdin);
 		aux = write(novo_socket, buffer, strlen(buffer));
 		
 		if(aux < 0){
