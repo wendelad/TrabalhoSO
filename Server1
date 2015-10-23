@@ -1,0 +1,251 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/times.h>
+#include <sys/select.h>
+#include <unistd.h>
+
+#define SERVER_OCUPADO "Servidor ocupado\n"
+
+#define MAX_USERS 40
+#define MSG_TAM 1024
+#define NICK_TAM 20
+#define PASS 20
+struct stclient {
+char nick[NICK_TAM+1] ;
+char senha [PASS+1];
+int sockfd ;
+int nick_ok ;//pra saber se o cliente existe
+int conectado ;//pra saber se o cliente esta conectado
+} ;
+
+struct stclient *lista_de_clientes ;  //O total de clientes é definido aqui ***********
+
+int socket_listen; //listen para ficar na escuta
+/* for select() */
+fd_set select_set ;
+
+
+int  max_users = MAX_USERS ;
+
+//tamanho da lista usuarios como foi pedido pelo professor aceita no maximo 40
+int  list_tam= 0 ;
+
+/* mensagem do usuario */
+char msg[MSG_TAM+1] ;
+
+void welcome(char *name) {
+printf("***************************************** \n * Bem vindo ao mensageiro instantaneo Scape \n *****************************************");
+
+printf("[uso] %s <port> [<max_users>]\n", name) ;
+}
+
+/* limpar lista de clientes */
+void clean_stclient(struct stclient *c) {
+    c->nick[0] = 0 ; c->nick[NICK_TAM] = 0 ;
+    c->sockfd = -1 ;
+    c->nick_ok = 0;
+    c->conectado = 0;
+}
+ 
+//se não puder mais inserir usuarios retorna 1 caso contrario retorna 0
+char inserir_socket(int socket) {
+    int i ;
+
+    if ( list_tam == max_users ) {
+        return 1 ;
+    }
+
+    for ( i = 0; i < max_users; i++ ) {
+        if ( lista_de_clientes[i].sockfd == -1 ) {
+            lista_de_clientes[i].conectado = 1 ;
+            lista_de_clientes[i].sockfd = socket ;
+            list_tam++ ;
+            break ;
+        }
+    }
+    return 0 ;
+}
+
+//Mensagem do usuario, está chegando a todos os outros usuarios
+void envia_mensagem_all(int _sock, int msg_sistema) {
+    int i ;
+    struct stclient msg_de ;
+
+   //mostrar que esta enviando a mensagem
+    for ( i = 0; i < max_users; i++ ) {
+        if ( lista_de_clientes[i].sockfd == _sock ) {
+             msg_de = lista_de_clientes[i] ;
+        }
+    }
+
+    for ( i = 0; i < max_users; i++ ) {
+        if ( (lista_de_clientes[i].sockfd != -1)    &&
+             (lista_de_clientes[i].sockfd != _sock) &&
+             (lista_de_clientes[i].sockfd != socket_listen) ) {
+
+            if(msg_sistema == 0) {
+                char newmsg[MSG_TAM+1] ;
+                system("clear");
+                snprintf(newmsg, MSG_TAM, "%s disse: %s", msg_de.nick, msg) ;
+                send(lista_de_clientes[i].sockfd, newmsg, strlen(newmsg), 0) ;
+            } else if (msg[0] != '\n') { // se a mensagem for vazia
+                send(lista_de_clientes[i].sockfd, msg, strlen(msg), 0) ;
+            }
+        }
+    }
+}
+
+//se o usuario sair da conversa fecha
+void remove_socket_lista(int _sock) {
+    int i ;
+
+    for ( i = 0; i < max_users; i++ ) {
+        if ( lista_de_clientes[i].sockfd == _sock ) {
+            sprintf(msg, "%s ..........saiu da conversa.........\n", lista_de_clientes[i].nick) ;
+            envia_mensagem_all(lista_de_clientes[i].sockfd, 1) ;
+
+            close(lista_de_clientes[i].sockfd) ;
+            clean_stclient(&lista_de_clientes[i]) ;
+            list_tam-- ;
+            break ;
+        }
+    }
+}
+
+//retorna a mensgem do usuario retorna  0 se tiver sucesso e 1 caso contrário
+char receber_msg(int _sock) {
+    int t ;
+
+    memset(msg,0x0,MSG_TAM+1) ;
+    t = recv(_sock, msg, MSG_TAM, 0 ) ;
+
+    if ( t == 0 ) {
+        remove_socket_lista(_sock) ;
+        return 1 ;
+    }
+
+    return 0 ;
+}
+
+int main(int argc, char **argv) {
+    int port ;
+    int t    ;
+
+    struct sockaddr_in server ;
+    struct timeval select_time ;
+
+    if ( argc == 1 ) {
+        welcome(argv[0]) ;
+        return -1 ;
+    }
+
+    if ( argc > 2 ) {
+        max_users = atoi(argv[2]) ;
+    }
+
+    port = atoi(argv[1]) ;
+
+    socket_listen = socket(AF_INET, SOCK_STREAM, 0) ;
+
+    if ( socket_listen< 0 ) {
+        perror("socket") ;
+        return -1 ;
+    }
+
+    server.sin_family = AF_INET ;
+    server.sin_port = htons(port) ;
+    server.sin_addr.s_addr = INADDR_ANY ;
+
+    t = sizeof(struct sockaddr_in) ;
+    if ( bind( socket_listen, (struct sockaddr *) &server, t ) < 0 ) {
+        perror("bind") ;
+        return -1 ;
+    }
+
+    if ( listen(socket_listen,5) < 0 ) {
+        perror("listen") ;
+        return -1 ;
+    }
+
+   //cria a lista de clientes
+    lista_de_clientes = (struct stclient *) malloc( max_users * sizeof(struct stclient) ) ;
+    if ( lista_de_clientes == NULL ) {
+        perror("malloc") ;
+        return -1 ;
+    }
+
+    /* limpar a lista */
+    for ( t = 0; t < max_users; t++ )
+        clean_stclient(&lista_de_clientes[t]) ;
+
+  //usaremos Cntrl+C para sair, mas o certo será "quit"
+    while ( 1 ) {
+        //pegar todos os usuarios e colocar na estrutura
+        FD_ZERO(&select_set) ;
+        FD_SET(socket_listen, &select_set) ;
+        for ( t = 0; list_tam > 0 && t < max_users; t++ ) {
+            if ( lista_de_clientes[t].sockfd != -1 ) {
+                FD_SET(lista_de_clientes[t].sockfd, &select_set) ;
+            }
+        }
+		//aqui vai printar na tela do servidor dizendo que está aguradando usuarios
+        printf("[+] Servidor aguardando usuarios %d [%d/%d] ...\n", port, list_tam, max_users) ;
+
+      //atualiza a cada dois segundos
+        select_time.tv_sec = 2 ;
+        select_time.tv_usec = 0 ;
+
+        if ( (t=select(FD_SETSIZE, &select_set, NULL, NULL, &select_time)) < 0 ) {
+            perror("select") ;
+            return -1 ;
+        }
+
+    
+        if ( t > 0 ) {
+           //Aceitar a conexão de entrada e adicionar  novo socket na lista.
+            if ( FD_ISSET(socket_listen, &select_set) ) {
+                int n ;
+
+                if ( (n=accept(socket_listen, NULL, NULL)) < 0 ) {
+                    perror("accept") ;
+                } else if ( inserir_socket(n) == 1 ) { /* server is busy */
+                    send(n,SERVER_OCUPADO,strlen(SERVER_OCUPADO),0) ;
+                    close(n) ;
+                }
+                continue ;
+            } else {
+                int i ;
+
+               //processa os dados recebidos
+                for ( i = 0; i < max_users; i++ ) {
+                    if ( FD_ISSET(lista_de_clientes[i].sockfd, &select_set) ) {
+                        if ( receber_msg(lista_de_clientes[i].sockfd) == 0 ) {
+                            int flag_system_msg = 0 ;
+
+                            if(lista_de_clientes[i].nick_ok == 0) { //para setar o apelido
+                                  lista_de_clientes[i].nick_ok = 1 ;
+                                  strncpy(lista_de_clientes[i].nick, msg, NICK_TAM) ;
+
+                              
+                                  if(lista_de_clientes[i].nick[strlen(lista_de_clientes[i].nick)-1]=='\n') {
+                                        lista_de_clientes[i].nick[strlen(lista_de_clientes[i].nick)-1]=0 ;
+                                  }
+
+                                  snprintf(msg, MSG_TAM, "%s : entrou na conversa!\n", lista_de_clientes[i].nick) ;
+                                  
+                                  flag_system_msg = 1 ;
+                            }
+                           envia_mensagem_all(lista_de_clientes[i].sockfd, flag_system_msg) ;
+                        }
+                    }
+                }
+            }
+        }
+    } 
+
+    return 0 ;
+} 
